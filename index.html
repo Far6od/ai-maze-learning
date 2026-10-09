@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Maze Learning Lab</title>
+<style>
+:root{--bg:#070b16;--panel:#0f1629;--line:#1e2a47;--tx:#e6ecff;--mut:#7f8db3;--acc:#38e8c6;--blue:#5078ff;--ok:#5cff8f;--warn:#ffa046;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{display:flex;gap:18px;padding:16px;min-height:100vh;align-items:flex-start;justify-content:center;flex-wrap:wrap}
+.stage{position:relative;flex:1 1 520px;display:grid;place-items:center;min-width:0}
+canvas{border-radius:12px;box-shadow:0 0 60px rgba(80,120,255,.18);border:1px solid var(--line);max-width:100%}
+.toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);background:rgba(7,11,22,.92);border:1px solid var(--acc);border-radius:14px;padding:18px 30px;text-align:center;opacity:0;pointer-events:none;transition:.4s;box-shadow:0 0 40px rgba(56,232,198,.3)}
+.toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.toast b{display:block;font-size:22px;letter-spacing:3px;color:var(--acc)}
+.toast span{color:var(--tx);letter-spacing:1px}
+aside{flex:0 0 330px;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+h1{font-size:15px;letter-spacing:3px;margin:0 0 14px}h1 span{color:var(--acc)}
+h2{font-size:11px;letter-spacing:2px;color:var(--mut);margin:16px 0 8px;border-bottom:1px solid var(--line);padding-bottom:5px}
+.row{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+button,select,input{font:inherit;color:var(--tx);background:#18223d;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+button{cursor:pointer;font-weight:600;letter-spacing:1px;font-size:12px;flex:1}
+button:hover:not(:disabled){border-color:var(--acc)}button:disabled{opacity:.4;cursor:default}
+button.primary{background:var(--acc);color:#04201a;border-color:var(--acc)}
+label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;color:var(--mut);font-size:12px}
+label b{color:var(--tx)}input[type=range]{padding:0;flex:1;accent-color:var(--acc)}
+#seed{width:110px;flex:1}
+.kv{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}.kv span{color:var(--mut)}.kv b{color:var(--tx)}
+#final{display:none;border:1px solid var(--acc);border-radius:10px;padding:10px 12px;margin-top:14px;background:rgba(56,232,198,.06)}
+#final h3{margin:0 0 6px;text-align:center;letter-spacing:3px;color:var(--acc);font-size:14px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--mut);margin-top:12px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
+:root[data-theme="light"]{--bg:#070b16}
+</style>
+</head>
+<body>
+<main>
+<section class="stage"><canvas id="cv"></canvas>
+<div class="toast" id="toast"><b>BEST PATH FOUND</b><span id="toastTxt"></span></div></section>
+<aside>
+<h1>AI MAZE <span>LEARNING LAB</span></h1>
+<div class="row"><button class="primary" id="bStart">START AI</button><button id="bPause" disabled>PAUSE</button><button id="bReset">RESET</button></div>
+<div class="row"><button id="bNew">NEW MAZE</button><button id="bCopy">COPY SEED</button></div>
+<div class="row"><input id="seed" inputmode="numeric" aria-label="seed"><button id="bSeed">LOAD SEED</button></div>
+<h2>SETTINGS</h2>
+<label>Difficulty<select id="diff"><option value="easy">EASY</option><option value="medium" selected>MEDIUM</option><option value="hard">HARD</option><option value="extreme">EXTREME</option></select></label>
+<label>Maze size <input type="range" id="size" min="10" max="40" step="5"><b id="sizeV"></b></label>
+<label>Attempts <input type="range" id="att" min="10" max="300" step="10"><b id="attV"></b></label>
+<label>Speed <input type="range" id="speed" min="1" max="4" step="1"><b id="speedV"></b></label>
+<h2>AI STATUS</h2>
+<div id="stats"></div>
+<div id="final"><h3>MAZE SOLVED</h3><div id="finalStats"></div></div>
+<div class="legend"><span><i style="background:#5078ff"></i>explored</span><span><i style="background:#ffa046"></i>previous run</span><span><i style="background:#38e8c6"></i>current run</span><span><i style="background:#5cff8f"></i>best path</span></div>
+</aside>
+</main>
+<script>
+'use strict';
+/* ================= RNG (seeded, reproducible mazes) ================= */
+const Rng = {
+  make(seed){ let a = seed >>> 0; // mulberry32
+    return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+};
+
+/* ================= MAZE GENERATION =================
+ Randomized DFS (recursive backtracker, iterative form) carves a spanning tree: every cell is
+ reachable from every other, so START->FINISH is guaranteed. Then "braiding" removes a few extra
+ walls to create loops, so several routes of different length exist (otherwise there is only one
+ path and nothing to optimise). Cell openings are bitmasks: N=1 E=2 S=4 W=8. */
+const DIRS = [{dx:0,dy:-1,opp:4},{dx:1,dy:0,opp:8},{dx:0,dy:1,opp:1},{dx:-1,dy:0,opp:2}];
+const MazeGen = {
+  generate(w, h, seed, braid){
+    const rnd = Rng.make(seed), open = new Uint8Array(w*h), seen = new Uint8Array(w*h), stack = [0];
+    seen[0] = 1;
+    while(stack.length){
+      const c = stack[stack.length-1], cx = c % w, cy = (c / w) | 0, opts = [];
+      for(let d=0; d<4; d++){ const nx=cx+DIRS[d].dx, ny=cy+DIRS[d].dy;
+        if(nx>=0&&ny>=0&&nx<w&&ny<h&&!seen[ny*w+nx]) opts.push(d); }
+      if(!opts.length){ stack.pop(); continue; }
+      const d = opts[(rnd()*opts.length)|0], n = (cy+DIRS[d].dy)*w + cx+DIRS[d].dx;
+      open[c] |= 1<<d; open[n] |= 1<<[2,3,0,1][d]; seen[n] = 1; stack.push(n);
+    }
+    for(let c=0; c<w*h; c++){ if(rnd() >= braid) continue; // knock out an extra wall -> loop
+      const d = (rnd()*4)|0, cx=c%w, cy=(c/w)|0, nx=cx+DIRS[d].dx, ny=cy+DIRS[d].dy;
+      if(nx<0||ny<0||nx>=w||ny>=h) continue;
+      open[c] |= 1<<d; open[ny*w+nx] |= 1<<[2,3,0,1][d]; }
+    const maze = {w, h, open, start:0, finish:w*h-1, seed};
+    if(!MazeGen.isSolvable(maze)) return MazeGen.generate(w, h, seed+1, braid); // safety net, never expected
+    return maze;
+  },
+  /* BFS used ONLY to verify solvability of the generated maze (not used by the AI) */
+  isSolvable(m){
+    const seen = new Uint8Array(m.w*m.h), q = [m.start]; seen[m.start] = 1;
+    for(let i=0; i<q.length; i++){ const c=q[i]; if(c===m.finish) return true;
+      for(let d=0; d<4; d++) if(m.open[c] & (1<<d)){ const n=c%m.w+DIRS[d].dx + ((c/m.w|0)+DIRS[d].dy)*m.w; if(!seen[n]){seen[n]=1;q.push(n);} } }
+    return false;
+  }
+};
+
+/* ================= AI / LEARNING SYSTEM =================
+ Tabular Q-learning. State = cell, action = move N/E/S/W (only through open passages).
+ Reward: -1 per step, +100 at FINISH. Q starts at 0 (optimistic vs. the negative step cost), so
+ the agent is drawn to untried moves; dead ends accumulate negative values and get avoided.
+ Epsilon-greedy: with probability eps take a random move, eps decays every attempt, so early
+ attempts wander/fail and later ones converge on short routes. Q persists across attempts. */
+class QAgent {
+  constructor(maze, p){ this.m = maze; this.p = p; this.q = new Float32Array(maze.w*maze.h*4); this.eps = p.eps0;
+    this.cap = maze.w*maze.h*p.capMul; }
+  maxQ(s){ let b=-Infinity; for(let d=0; d<4; d++) if(this.m.open[s]&(1<<d)) b=Math.max(b,this.q[s*4+d]); return b; }
+  choose(s){
+    const o = this.m.open[s], acts = [];
+    if(Math.random() < this.eps){ for(let d=0; d<4; d++) if(o&(1<<d)) acts.push(d); return acts[(Math.random()*acts.length)|0]; }
+    let best = -Infinity;
+    for(let d=0; d<4; d++) if(o&(1<<d)){ const v=this.q[s*4+d]; if(v>best+1e-6){best=v;acts.length=0;acts.push(d);} else if(Math.abs(v-best)<=1e-6) acts.push(d); }
+    return acts[(Math.random()*acts.length)|0]; // random tie-break
+  }
+  /* Runs one full attempt (learning online) and returns the trajectory of cells visited. */
+  runEpisode(){
+    const m = this.m, {alpha, gamma} = this.p, traj = [m.start]; let s = m.start, success = false;
+    while(traj.length-1 < this.cap){
+      const a = this.choose(s), n = (((s/m.w)|0)+DIRS[a].dy)*m.w + s%m.w + DIRS[a].dx, done = n === m.finish;
+      const target = done ? 100 : -1 + gamma*this.maxQ(n);
+      this.q[s*4+a] += alpha*(target - this.q[s*4+a]);
+      traj.push(s = n); if(done){ success = true; break; }
+    }
+    this.eps = Math.max(0.02, this.eps*this.p.decay);
+    return {traj, success};
+  }
+}
+/* Removes loops from a trajectory -> the actual route that connects START to FINISH. */
+function loopErase(traj){
+  const out = [], pos = new Map();
+  for(const c of traj){ if(pos.has(c)){ const k=pos.get(c); for(let i=k+1;i<out.length;i++) pos.delete(out[i]); out.length = k+1; } else { pos.set(c,out.length); out.push(c); } }
+  return out;
+}
+
+/* ================= CONFIG ================= */
+const PRESETS = {
+  easy:   {size:10, att:30,  speed:2, braid:.03, alpha:.5,  gamma:.95, eps0:.25, decay:.95,  capMul:8},
+  medium: {size:20, att:60,  speed:2, braid:.05, alpha:.4,  gamma:.95, eps0:.20, decay:.96,  capMul:8},
+  hard:   {size:30, att:100, speed:3, braid:.08, alpha:.3,  gamma:.95, eps0:.15, decay:.97,  capMul:8},
+  extreme:{size:40, att:150, speed:3, braid:.10, alpha:.25, gamma:.95, eps0:.12, decay:.975, capMul:8}
+};
+const SPEEDS = [{n:'SLOW',r:25},{n:'NORMAL',r:100},{n:'FAST',r:500},{n:'VERY FAST',r:6000}]; // steps / second
+
+/* ================= SIMULATION ENGINE ================= */
+const Sim = {
+  st:'idle', paused:false, size:20, att:60, speed:1, preset:PRESETS.medium, seed:0,
+  load(seed){ // (re)build maze + wipe all learned data and statistics
+    this.seed = seed; this.maze = MazeGen.generate(this.size, this.size, seed, this.preset.braid);
+    this.resetAI(); },
+  resetAI(){
+    const n = this.maze.w*this.maze.h;
+    this.agent = new QAgent(this.maze, this.preset); this.visits = new Uint16Array(n);
+    Object.assign(this, {st:'idle', paused:false, ep:null, idx:0, acc:0, attempt:0, curSteps:0, best:null, first:0,
+      toBest:0, ok:0, fail:0, explored:0, last:[], flash:0, repIdx:0});
+  },
+  start(){ if(this.st==='done') this.resetAI(); if(this.st==='idle'){ this.st='running'; this.paused=false; } },
+  begin(){ this.attempt++; this.ep = this.agent.runEpisode(); this.idx = 0; this.curSteps = 0; this.markVisit(this.maze.start); },
+  markVisit(c){ if(!this.visits[c]++) this.explored++; },
+  end(){
+    const e = this.ep;
+    if(e.success){ this.ok++; const route = loopErase(e.traj), len = route.length-1;
+      if(!this.first) this.first = len;
+      if(!this.best || len < this.best.length-1){ this.best = route; this.toBest = this.attempt; this.flash = performance.now(); } }
+    else this.fail++;
+    this.last = e.traj; this.ep = null;
+    if(this.attempt >= this.att && this.best){ this.st = 'replay'; this.repIdx = 0; this.acc = 0; } // learning finished
+  },
+  tick(dt){
+    if(this.paused) return;
+    if(this.st === 'running'){
+      this.acc += dt * SPEEDS[this.speed].r; let n = Math.min(Math.floor(this.acc), 4000); this.acc -= Math.floor(this.acc);
+      while(n-- > 0 && this.st === 'running'){
+        if(!this.ep) this.begin();
+        this.idx++; this.curSteps = this.idx; this.markVisit(this.ep.traj[this.idx]);
+        if(this.idx >= this.ep.traj.length-1) this.end();
+      }
+    } else if(this.st === 'replay'){ // final replay of the best path
+      this.acc += dt * Math.min(Math.max(SPEEDS[this.speed].r, 40), 400); const n = Math.floor(this.acc); this.acc -= n;
+      this.repIdx = Math.min(this.repIdx + n, this.best.length-1);
+      if(this.repIdx >= this.best.length-1){ this.st = 'done'; UI.toast(); }
+    }
+  }
+};
+
+/* ================= RENDERER ================= */
+const Renderer = {
+  cv:document.getElementById('cv'),
+  resize(){
+    const dpr = window.devicePixelRatio||1, sz = Math.floor(Math.max(280, Math.min(document.querySelector('.stage').clientWidth, innerHeight-40, 900)));
+    this.size = sz; this.cv.width = this.cv.height = sz*dpr; this.cv.style.width = this.cv.style.height = sz+'px';
+    this.ctx = this.cv.getContext('2d'); this.ctx.setTransform(dpr,0,0,dpr,0,0); this.dpr = dpr; this.buildWalls();
+  },
+  buildWalls(){ // walls never change within a maze -> render once to an offscreen canvas
+    const m = Sim.maze, cs = this.size/m.w, w = document.createElement('canvas'); w.width = w.height = this.size*this.dpr;
+    const c = w.getContext('2d'); c.scale(this.dpr,this.dpr); c.strokeStyle = '#8ea0c4'; c.lineWidth = Math.max(1.5, cs*.1); c.lineCap = 'round'; c.beginPath();
+    for(let y=0;y<m.h;y++) for(let x=0;x<m.w;x++){ const o=m.open[y*m.w+x], X=x*cs, Y=y*cs;
+      if(!(o&1)){c.moveTo(X,Y);c.lineTo(X+cs,Y);} if(!(o&8)){c.moveTo(X,Y);c.lineTo(X,Y+cs);}
+      if(!(o&2)){c.moveTo(X+cs,Y);c.lineTo(X+cs,Y+cs);} if(!(o&4)){c.moveTo(X,Y+cs);c.lineTo(X+cs,Y+cs);} }
+    c.stroke(); this.walls = w; this.cs = cs;
+  },
+  line(path, count, color, lw, glow){
+    const {ctx, cs} = this, w = Sim.maze.w; if(count < 2) return;
+    ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineJoin = ctx.lineCap = 'round';
+    if(glow){ ctx.shadowColor = color; ctx.shadowBlur = glow; }
+    ctx.beginPath(); for(let i=0;i<count;i++){ const c=path[i], x=((c%w)+.5)*cs, y=(((c/w)|0)+.5)*cs; i?ctx.lineTo(x,y):ctx.moveTo(x,y); }
+    ctx.stroke(); ctx.restore();
+  },
+  dot(c, color, r, glow){ const {ctx,cs}=this, w=Sim.maze.w; ctx.save(); ctx.fillStyle=color; ctx.shadowColor=color; ctx.shadowBlur=glow;
+    ctx.beginPath(); ctx.arc(((c%w)+.5)*cs, (((c/w)|0)+.5)*cs, r, 0, 7); ctx.fill(); ctx.restore(); },
+  draw(){
+    const S = Sim, m = S.maze, {ctx, cs, size} = this, final = S.st==='replay' || S.st==='done', lw = Math.max(2, cs*.28);
+    ctx.fillStyle = '#0b1020'; ctx.fillRect(0,0,size,size);
+    if(!final){ // exploration heat: brighter = visited more often
+      for(let i=0;i<S.visits.length;i++){ const v=S.visits[i]; if(!v) continue;
+        ctx.fillStyle = `rgba(80,120,255,${Math.min(.55, .1 + Math.log2(v+1)*.07)})`; ctx.fillRect((i%m.w)*cs, ((i/m.w)|0)*cs, cs, cs); }
+      this.line(S.last, S.last.length, 'rgba(255,160,70,.4)', lw*.6);
+      if(S.ep) this.line(S.ep.traj, S.idx+1, '#38e8c6', lw*.8, 8);
+    }
+    if(S.best){
+      if(final) this.line(S.best, S.repIdx+1, '#5cff8f', lw, 14);
+      else { const pulse = performance.now()-S.flash < 900; this.line(S.best, S.best.length, pulse?'#ffffff':'rgba(92,255,143,.6)', pulse?lw*1.6:lw*.7, pulse?22:6); }
+    }
+    ctx.drawImage(this.walls, 0, 0, size, size);
+    ctx.fillStyle = 'rgba(80,160,255,.9)'; this.dot(m.start, '#4da3ff', cs*.3, 10); this.dot(m.finish, '#ff4d6d', cs*.3, 10);
+    const pos = final ? S.best[S.repIdx] : (S.ep ? S.ep.traj[S.idx] : m.start);
+    this.dot(pos, '#ffffff', Math.max(3, cs*.26), 16);
+  }
+};
+
+/* ================= STATISTICS + UI ================= */
+const $ = id => document.getElementById(id);
+const UI = {
+  init(){
+    $('bStart').onclick = () => { Sim.start(); UI.hideToast(); };
+    $('bPause').onclick = () => { Sim.paused = !Sim.paused; };
+    $('bReset').onclick = () => { Sim.resetAI(); UI.hideToast(); };
+    $('bNew').onclick = () => UI.newMaze((Math.random()*1e6)|0);
+    $('bSeed').onclick = () => UI.newMaze(parseInt($('seed').value,10) || 1);
+    $('bCopy').onclick = () => { const t=String(Sim.seed); (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).catch(()=>{$('seed').select();document.execCommand('copy');}); $('bCopy').textContent='COPIED'; setTimeout(()=>$('bCopy').textContent='COPY SEED',1200); };
+    $('diff').onchange = () => { const p = PRESETS[$('diff').value]; Sim.preset = p; Sim.size = p.size; Sim.att = p.att; Sim.speed = p.speed; UI.syncControls(); UI.newMaze(Sim.seed); };
+    $('size').oninput = () => { Sim.size = +$('size').value; UI.syncControls(); UI.newMaze(Sim.seed); };
+    $('att').oninput = () => { Sim.att = +$('att').value; UI.syncControls(); };
+    $('speed').oninput = () => { Sim.speed = +$('speed').value - 1; UI.syncControls(); };
+    addEventListener('resize', () => { Renderer.resize(); });
+  },
+  newMaze(seed){ Sim.load(seed); UI.hideToast(); Renderer.resize(); UI.syncControls(); },
+  syncControls(){
+    $('size').value = Sim.size; $('sizeV').textContent = Sim.size+'×'+Sim.size; $('att').value = Sim.att; $('attV').textContent = Sim.att;
+    $('speed').value = Sim.speed+1; $('speedV').textContent = SPEEDS[Sim.speed].n; $('seed').value = Sim.seed;
+  },
+  toast(){ $('toastTxt').textContent = (Sim.best.length-1)+' STEPS · '+Sim.attempt+' ATTEMPTS'; $('toast').classList.add('show'); },
+  hideToast(){ $('toast').classList.remove('show'); },
+  update(){
+    const S = Sim, bs = S.best ? S.best.length-1 : null, imp = S.first && bs ? (S.first-bs)/S.first*100 : 0, run = S.st==='running';
+    $('bStart').disabled = run || S.st==='replay' || (S.paused && run); $('bStart').textContent = S.st==='done' ? 'RESTART AI' : 'START AI';
+    $('bPause').disabled = !(run || S.st==='replay'); $('bPause').textContent = S.paused ? 'RESUME' : 'PAUSE';
+    ['diff','size','att'].forEach(i => $(i).disabled = false);
+    const rows = [['Status', S.st==='idle'?'READY':S.st==='running'?(S.paused?'PAUSED':'LEARNING'):S.st==='replay'?(S.paused?'PAUSED':'REPLAYING BEST'):'SOLVED'],
+      ['Attempt', S.attempt+' / '+S.att], ['Current steps', S.curSteps], ['Best steps', bs ?? '—'], ['Cells explored', S.explored+' / '+S.maze.w*S.maze.h],
+      ['Successful runs', S.ok], ['Failed runs', S.fail], ['Improvement', imp.toFixed(1)+'%'], ['Exploration ε', S.agent.eps.toFixed(3)], ['Maze seed', S.seed]];
+    $('stats').innerHTML = rows.map(r => `<div class="kv"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
+    const fin = S.st==='replay' || S.st==='done'; $('final').style.display = fin ? 'block' : 'none';
+    if(fin) $('finalStats').innerHTML = [['Total attempts',S.attempt],['Best path',bs+' steps'],['First solution',S.first+' steps'],['Improvement',imp.toFixed(1)+'%'],['Best found on attempt',S.toBest]]
+      .map(r => `<div class="kv"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
+  }
+};
+
+/* ================= MAIN LOOP (requestAnimationFrame keeps the UI responsive) ================= */
+let lastT = performance.now();
+function frame(t){ const dt = Math.min(.05, (t-lastT)/1000); lastT = t; Sim.tick(dt); Renderer.draw(); UI.update(); requestAnimationFrame(frame); }
+UI.init();
+Sim.size = 20; Sim.att = 60; Sim.speed = 1;
+UI.newMaze((Math.random()*1e6)|0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
